@@ -250,8 +250,8 @@ class NNLayer:
     def calc_loss(self, pred, y, weight_decay=None):
         # calculate loss
         loss = np.mean(1 / 4. * (pred - y)**2)
-        if weight_decay is not None:
-            loss += (weight_decay * np.sum(self.W**2))
+        if self.weight_decay is not None:
+            loss += (self.weight_decay * np.sum(self.W**2))
         return loss
 
     def calc_grad(self, x, y):
@@ -266,6 +266,8 @@ class NNLayer:
         for l in range(len(self.W) - 2, -1, -1):
             # print(l)
             d = self.W[l + 1][:-1].dot(d) * self.theta_prime(self.s_list[l])
+            if self.weight_decay is not None:
+                d += 2 * self.weight_decay * self.W[l]
             self.d_list.append(d)
         self.d_list = list(reversed(self.d_list))
 
@@ -339,6 +341,8 @@ class NNLayer:
             loss = self.calc_loss(pred, y)
             Pred.append(pred)
             Losses += 1. / N * loss
+            if self.weight_decay is not None:
+                Losses += 1. / N * weight_decay * np.sum(W**2)
 
         Pred = np.concatenate(Pred)
         return Losses, Pred
@@ -447,6 +451,50 @@ plt.figure(figsize=(4, 4))
 plot_decision_boundary(trainer, features_train, labels_train)
 
 # %%
+# ------------- variable learning rate gradient descent heuristic ------------ #
+model = NNLayer(dims=[2, 10, 1], eps=1, weight_decay=0.01 / 300)
+
+bs = 100
+dataset = Dataset(features_train, labels_train)
+dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
+
+lr = 1
+trainer = Trainer(model, lr=lr, alpha=1.05, beta=0.6, weight_decay=None)
+
+log_interval = int(len(dataloader))
+metrics = Metrics(log_interval=log_interval)
+
+max_iter = int(2e6)
+iteration = 0
+obar = tqdm(range(max_iter), desc='Training')
+
+while iteration < max_iter:
+    # for ep in range(int(max_iter)):
+    for i, (x, y) in enumerate(iter(dataloader)):
+        loss, preds = trainer.train_batch_var_lr(x, y)
+        # loss, preds = trainer.train_batch(x, y)
+        score, prec, rec = trainer.calc_metrics(y, preds)
+        metrics.update(loss, score, prec, rec)
+    if iteration % log_interval == 0:
+        r_loss, r_acc, r_prec, r_rec = metrics.get_latest_metrics()
+        obar.set_postfix({
+            'loss': r_loss,
+            'acc': r_acc,
+            'lr': trainer.current_lr
+        })
+        obar.update(log_interval)
+    iteration += log_interval
+obar.close()
+
+fig, ax = plt.subplots(1, 1)
+ax.plot(metrics.losses)
+ax.set_yscale('log')
+ax.set_xscale('log')
+
+plt.figure(figsize=(4, 4))
+plot_decision_boundary(trainer, features_train, labels_train)
+
+# %%
 # ------------------------------ early stopping ------------------------------ #
 # split train and val
 train_features, val_features, train_labels, val_labels = train_test_split(
@@ -458,7 +506,7 @@ bs = 10
 dataloader_train = DataLoader(train_dataset, batch_size=bs, shuffle=True)
 dataloader_val = DataLoader(val_dataset, batch_size=bs, shuffle=True)
 
-model = NNLayer(dims=[2, 10, 1], eps=1)
+model = NNLayer(dims=[2, 10, 1], eps=1, weight_decay=0.01 / 300)
 
 lr = 1
 trainer = Trainer(model, lr=lr, alpha=1.05, beta=0.6, weight_decay=0.01 / 300)
